@@ -22,7 +22,8 @@ const messages = {
     chip: "{{number}}. {{start}}–{{end}}",
     endsAt: "遮挡结束于 {{at}}",
     goTo: "跳转到此处遮挡",
-    helpDraw: "在画面上拖动。",
+    helpDraw:
+      "在画面上拖动。方框覆盖接下来的 10 秒；松开时按住 Shift 可改为覆盖整个所选片段。",
     helpDrawTerm: "遮住内容",
     helpFollow:
       "向前拖动进度，再把遮挡框拖到目标移动到的位置。遮挡框会在你设定的各点之间滑动。画得比要遮住的东西稍大一些。",

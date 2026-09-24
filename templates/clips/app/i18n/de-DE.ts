@@ -26,7 +26,8 @@ const messages = {
     chip: "{{number}}. {{start}}–{{end}}",
     endsAt: "Schwärzung endet bei {{at}}",
     goTo: "Zu dieser Schwärzung springen",
-    helpDraw: "Ziehen Sie über das Bild.",
+    helpDraw:
+      "Ziehen Sie über das Bild. Der Rahmen deckt die nächsten 10 Sekunden ab; halten Sie beim Loslassen die Umschalttaste gedrückt, um stattdessen den ganzen ausgewählten Abschnitt abzudecken.",
     helpDrawTerm: "Etwas abdecken",
     helpFollow:
       "Spulen Sie vor und ziehen Sie das Feld dorthin, wo sich das Objekt nun befindet. Das Feld bewegt sich zwischen den von Ihnen gesetzten Punkten. Zeichnen Sie es etwas größer als das, was es abdeckt.",

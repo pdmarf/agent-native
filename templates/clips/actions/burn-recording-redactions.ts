@@ -47,6 +47,7 @@ import { z } from "zod";
 
 import { parseEdits, serializeEdits } from "../app/lib/timestamp-mapping.js";
 import {
+  extendRedactionsToEnd,
   otherOverlays,
   parseRedactions,
   redactionBurnFfmpegArgs,
@@ -244,7 +245,9 @@ export async function burnRedactionsFor(args: {
   // carry the same blocks, and a re-burn should not reproduce the first.
   const mosaicSeed = Math.floor(Math.random() * 2 ** 31);
   const graph = redactionFilterGraph(
-    redactions,
+    // A box the editor ran to the end of the recording covers the end of the
+    // file, however much longer the file is than the row said.
+    extendRedactionsToEnd(redactions, existing.durationMs, burnDurationMs),
     burnDurationMs,
     burnWidth,
     burnHeight,

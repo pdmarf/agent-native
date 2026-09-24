@@ -22,7 +22,11 @@ vi.mock("@/lib/utils", () => ({
 
 import type { VideoRedaction } from "@/lib/video-redactions";
 
-import { RedactionLane } from "./redaction-lane";
+import {
+  REDACTION_LANE_SCROLL_ATTR,
+  RedactionLane,
+  redactionLaneViewportHeight,
+} from "./redaction-lane";
 
 const DURATION = 10_000;
 const WIDTH = 1_000; // 1px = 10ms
@@ -231,5 +235,60 @@ describe("dragging a redaction's edges", () => {
     const left = Number.parseFloat(bar.style.left);
     const width = Number.parseFloat(bar.style.width);
     expect(left + width).toBeLessThanOrEqual(WIDTH);
+  });
+});
+
+describe("more redactions than the lane shows at once", () => {
+  it("scrolls the lane to a redaction selected from elsewhere", () => {
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    // Nine boxes on screen at once, so nine rows — past what fits.
+    const many: VideoRedaction[] = Array.from({ length: 9 }, (_, i) => ({
+      ...redaction,
+      id: `r${i}`,
+    }));
+    const renderWith = (selectedId: string | null) =>
+      act(() => {
+        root.render(
+          <div
+            {...{ [REDACTION_LANE_SCROLL_ATTR]: "" }}
+            style={{ height: redactionLaneViewportHeight(9), overflowY: "scroll" }}
+          >
+            <RedactionLane
+              width={WIDTH}
+              durationMs={DURATION}
+              redactions={many}
+              selectedId={selectedId}
+              onSelect={vi.fn()}
+              onPreview={vi.fn()}
+              onCommit={vi.fn()}
+            />
+          </div>,
+        );
+      });
+
+    renderWith(null);
+    const scroller = container.firstElementChild as HTMLElement;
+    Object.defineProperty(scroller, "clientHeight", {
+      value: redactionLaneViewportHeight(9),
+    });
+    expect(scroller.scrollTop).toBe(0);
+
+    // Every bar has a row of its own: none is drawn over another.
+    const tops = [
+      ...container.querySelectorAll<HTMLElement>('[aria-pressed]'),
+    ].map((bar) => bar.style.top);
+    expect(new Set(tops).size).toBe(9);
+
+    renderWith("r8");
+    expect(scroller.scrollTop).toBeGreaterThan(0);
+
+    renderWith("r0");
+    expect(scroller.scrollTop).toBe(0);
+
+    act(() => root.unmount());
+    container.remove();
   });
 });

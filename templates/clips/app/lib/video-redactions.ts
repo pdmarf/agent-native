@@ -263,12 +263,64 @@ function rectOf(key: RedactionKey): RedactionRect {
   return { x: key.x, y: key.y, w: key.w, h: key.h };
 }
 
-/** True while the redaction is covering something at this moment. */
+/**
+ * Within this of the end of the clip, a redaction counts as running to the
+ * end. Drawn to the end of the timeline, a box ends exactly where the clip
+ * does — and "until the end" has to keep meaning that on the last frame, and
+ * in a file that turns out longer than the recording said.
+ */
+export const REDACTION_END_TOLERANCE_MS = 100;
+
+/** True when the redaction runs to the end of a clip this long. */
+export function redactionReachesEnd(
+  redaction: VideoRedaction,
+  durationMs: number,
+): boolean {
+  return (
+    durationMs > 0 && redaction.endMs >= durationMs - REDACTION_END_TOLERANCE_MS
+  );
+}
+
+/**
+ * True while the redaction is covering something at this moment.
+ *
+ * Pass the clip's length: a redaction that runs to the end then stays on past
+ * its own end. Without that, one ending at the end of the clip switched off
+ * at exactly the moment playback stopped, leaving the last frame — the one
+ * that stays on screen — showing what it covered.
+ */
 export function isRedactionActiveAt(
   redaction: VideoRedaction,
   atMs: number,
+  durationMs?: number,
 ): boolean {
-  return atMs >= redaction.startMs && atMs < redaction.endMs;
+  if (atMs < redaction.startMs) return false;
+  if (atMs < redaction.endMs) return true;
+  return durationMs !== undefined && redactionReachesEnd(redaction, durationMs);
+}
+
+/**
+ * Stretch every redaction that runs to the end of the recording, as the row
+ * knows it, to the end of the file itself.
+ *
+ * The editor lays redactions out against `recordings.durationMs`, which is
+ * client-reported and can be short of the real file. A box drawn "to the end"
+ * then stopped short of it, and the burn left the tail of the video showing.
+ */
+export function extendRedactionsToEnd(
+  redactions: VideoRedaction[],
+  recordedDurationMs: number,
+  fileDurationMs: number,
+): VideoRedaction[] {
+  // Only one that ends *at* the recorded end. One set to end past it was not
+  // laid out against that length, so it says where it ends on its own.
+  return redactions.map((r) =>
+    recordedDurationMs > 0 &&
+    Math.abs(r.endMs - recordedDurationMs) <= REDACTION_END_TOLERANCE_MS &&
+    fileDurationMs > r.endMs
+      ? { ...r, endMs: Math.round(fileDurationMs) }
+      : r,
+  );
 }
 
 /**
@@ -329,9 +381,14 @@ export function removeRedactionKey(
 }
 
 /**
- * Move a redaction's time range, keeping its waypoints where they are in the
- * picture. Keys outside the new range still matter — they are what the box
- * interpolates from at the edges — so they are kept, not trimmed.
+ * Move a redaction's time range. A waypoint the range no longer reaches is
+ * dropped: left in place it steers the box from somewhere off the end of its
+ * bar, where it cannot be seen, dragged or removed.
+ *
+ * Dropping one must not move the box, though — a redaction that follows
+ * something is only as good as its path. So where the box was still on its way
+ * somewhere at the new edge, a waypoint is put there, holding the position it
+ * had at that moment.
  */
 export function setRedactionRange(
   redaction: VideoRedaction,
@@ -340,7 +397,30 @@ export function setRedactionRange(
 ): VideoRedaction {
   const start = Math.max(0, Math.round(Math.min(startMs, endMs)));
   const end = Math.max(start, Math.round(Math.max(startMs, endMs)));
-  return { ...redaction, startMs: start, endMs: end };
+  const inside = redaction.keys.filter(
+    (k) => k.atMs >= start && k.atMs <= end,
+  );
+  if (inside.length === redaction.keys.length) {
+    return { ...redaction, startMs: start, endMs: end };
+  }
+
+  const keys = [...inside];
+  const pin = (atMs: number, neighbour: RedactionKey | undefined) => {
+    const rect = redactionRectAt(redaction, atMs);
+    if (neighbour && sameRect(rect, neighbour)) return;
+    keys.push({ atMs, ...rect });
+  };
+  if (redaction.keys.some((k) => k.atMs < start)) pin(start, inside[0]);
+  if (redaction.keys.some((k) => k.atMs > end)) {
+    pin(end, inside[inside.length - 1]);
+  }
+  keys.sort((a, b) => a.atMs - b.atMs);
+  return { ...redaction, startMs: start, endMs: end, keys };
+}
+
+function sameRect(a: RedactionRect, b: RedactionRect): boolean {
+  const close = (x: number, y: number) => Math.abs(x - y) < 1e-6;
+  return close(a.x, b.x) && close(a.y, b.y) && close(a.w, b.w) && close(a.h, b.h);
 }
 
 /** The shortest a redaction can be and still be worth drawing. */

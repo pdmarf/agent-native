@@ -53,6 +53,7 @@ async function writeAppStateClient(key: string, value: unknown): Promise<void> {
 }
 
 import { withMediaVersion } from "@/lib/media-url";
+import { queueWrite, type QueuedWrites } from "@/lib/queued-writes";
 import {
   parsePlaybackSpeed,
   readPlaybackSpeedPreference,
@@ -95,7 +96,14 @@ import { computePeaks, type WaveformPeaks } from "@/lib/waveform-peaks";
 
 import { ChaptersEditor } from "./chapters-editor";
 import { EditorToolbar } from "./editor-toolbar";
-import { RedactionLane } from "./redaction-lane";
+import {
+  packRedactionRows,
+  REDACTION_LANE_SCROLL_ATTR,
+  REDACTION_LANE_SCROLLBAR_PX,
+  RedactionLane,
+  redactionLaneViewportHeight,
+  VISIBLE_REDACTION_ROWS,
+} from "./redaction-lane";
 import { RedactionOverlay } from "./redaction-overlay";
 import { RewindExtensionDialog } from "./rewind-extension-dialog";
 import { StitchManager } from "./stitch-manager";
@@ -290,6 +298,9 @@ function clampTimelineZoom(value: number): number {
   return Math.round(clamped * 10) / 10;
 }
 
+/** How long a newly drawn redaction lasts, unless Shift asks for more. */
+const NEW_REDACTION_MS = 10_000;
+
 function normalizeWheelDeltaY(
   event: WheelEvent,
   viewportWidth: number,
@@ -393,6 +404,21 @@ export function EditorLayout({ recordingId, className }: EditorLayoutProps) {
   const [pendingOverlays, setPendingOverlays] = useState<unknown[] | null>(
     null,
   );
+  /**
+   * Saves of each list, one at a time and in order. Two edits made in quick
+   * succession — drag one bar's end, then another's — would otherwise be two
+   * saves in flight at once: the first to finish dropped the optimistic copy
+   * the second was still relying on, and the server could take them in either
+   * order, keeping whichever arrived last. That lost the first edit.
+   */
+  const trimWritesRef = useRef<QueuedWrites>({
+    seq: 0,
+    tail: Promise.resolve(),
+  });
+  const overlayWritesRef = useRef<QueuedWrites>({
+    seq: 0,
+    tail: Promise.resolve(),
+  });
   const [previewRedactions, setPreviewRedactions] = useState<
     VideoRedaction[] | null
   >(null);
@@ -463,6 +489,16 @@ export function EditorLayout({ recordingId, className }: EditorLayoutProps) {
     [durationMs, savedEdits],
   );
   const redactions = previewRedactions ?? savedRedactions;
+  // Worked out the way the lane lays itself out, so the box it scrolls in is
+  // exactly as tall as its rows need, up to the few that show at once.
+  const redactionRowCount = useMemo(
+    () =>
+      packRedactionRows(
+        redactions.map((r) => clampRedactionToDuration(r, durationMs)),
+      ).rows,
+    [durationMs, redactions],
+  );
+  const redactionRowsScroll = redactionRowCount > VISIBLE_REDACTION_ROWS;
   const selectedRedaction = useMemo(
     () => redactions.find((r) => r.id === selectedRedactionId) ?? null,
     [redactions, selectedRedactionId],
@@ -981,9 +1017,13 @@ export function EditorLayout({ recordingId, className }: EditorLayoutProps) {
       const record = options?.record ?? true;
       if (record) pushHistory(snapshotOf(savedEdits));
       setPendingTrims(next.trims);
+      const write = trimWritesRef.current;
+      const seq = ++write.seq;
       try {
-        await setTrims.mutateAsync({ recordingId, trims: next.trims });
-        await playerDataQuery.refetch();
+        await queueWrite(write, async () => {
+          await setTrims.mutateAsync({ recordingId, trims: next.trims });
+          await playerDataQuery.refetch();
+        });
         return true;
       } catch (err: any) {
         if (record) dropNewestHistory();
@@ -993,7 +1033,7 @@ export function EditorLayout({ recordingId, className }: EditorLayoutProps) {
         // worse than the failure itself.
         return false;
       } finally {
-        setPendingTrims(null);
+        if (seq === write.seq) setPendingTrims(null);
       }
     },
     [
@@ -1180,12 +1220,16 @@ export function EditorLayout({ recordingId, className }: EditorLayoutProps) {
     async (overlays: unknown[], record: boolean) => {
       if (record) pushHistory(snapshotOf(savedEdits));
       setPendingOverlays(overlays);
+      const write = overlayWritesRef.current;
+      const seq = ++write.seq;
       try {
-        await setOverlays.mutateAsync({
-          recordingId,
-          overlays: overlays as Record<string, unknown>[],
+        await queueWrite(write, async () => {
+          await setOverlays.mutateAsync({
+            recordingId,
+            overlays: overlays as Record<string, unknown>[],
+          });
+          await playerDataQuery.refetch();
         });
-        await playerDataQuery.refetch();
         return true;
       } catch (err: any) {
         if (record) dropNewestHistory();
@@ -1194,7 +1238,7 @@ export function EditorLayout({ recordingId, className }: EditorLayoutProps) {
         // can tell whether the step actually landed.
         return false;
       } finally {
-        setPendingOverlays(null);
+        if (seq === write.seq) setPendingOverlays(null);
       }
     },
     [
@@ -1224,12 +1268,16 @@ export function EditorLayout({ recordingId, className }: EditorLayoutProps) {
 
   /** A box drawn on the picture becomes a redaction over a stretch of time. */
   const addRedaction = useCallback(
-    (rect: RedactionRect) => {
+    (rect: RedactionRect, { wholeSection }: { wholeSection: boolean }) => {
       const at = Math.round(playheadMs);
-      // The highlighted section if there is one, because "redact this bit" is
-      // usually the bit already selected; otherwise five seconds from here,
-      // which the user then drags to fit.
-      const range = selectedClip ?? { startMs: at, endMs: at + 5_000 };
+      // The next few seconds from here, which the user then drags to fit.
+      // Not the selected section by default: a clip nobody has split is one
+      // section as long as the video, so every box ran the full length and
+      // took a row of its own. Shift asks for the section — or, with none
+      // selected, the whole clip.
+      const range = wholeSection
+        ? (selectedClip ?? { startMs: 0, endMs: durationMs })
+        : { startMs: at, endMs: at + NEW_REDACTION_MS };
       const startMs = Math.round(range.startMs);
       const redaction: VideoRedaction = clampRedactionToDuration(
         {
@@ -1574,6 +1622,7 @@ export function EditorLayout({ recordingId, className }: EditorLayoutProps) {
                 <RedactionOverlay
                   redactions={redactions}
                   playheadMs={playheadMs}
+                  durationMs={durationMs}
                   selectedId={selectedRedactionId}
                   onSelect={setSelectedRedactionId}
                   onDraw={addRedaction}
@@ -1817,8 +1866,25 @@ export function EditorLayout({ recordingId, className }: EditorLayoutProps) {
 
                 {redactions.length > 0 ? (
                   <div
-                    className="min-w-0 overflow-hidden"
-                    style={{ width: viewportWidth }}
+                    {...{ [REDACTION_LANE_SCROLL_ATTR]: "" }}
+                    // A sideways swipe here pans a zoomed timeline, as it does
+                    // over the track; an up-and-down one scrolls the rows.
+                    onWheel={handleTimelineWheel}
+                    className={cn(
+                      "min-w-0 overflow-x-hidden",
+                      redactionRowsScroll
+                        ? "clips-lane-scroll overflow-y-scroll"
+                        : "overflow-y-hidden",
+                    )}
+                    style={{
+                      // A scrollbar takes its width from inside the box, so it
+                      // gets room of its own rather than covering the end
+                      // grip of a redaction that runs to the end of the clip.
+                      width:
+                        viewportWidth +
+                        (redactionRowsScroll ? REDACTION_LANE_SCROLLBAR_PX : 0),
+                      maxHeight: redactionLaneViewportHeight(redactionRowCount),
+                    }}
                   >
                     <div
                       style={{

@@ -1,5 +1,5 @@
 import { useT } from "@agent-native/core/client/i18n";
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { formatMs } from "@/lib/timestamp-mapping";
 import { cn } from "@/lib/utils";
@@ -27,11 +27,24 @@ import {
 
 const ROW_HEIGHT = 16;
 const ROW_GAP = 2;
-/** Beyond this the lane would crowd out the timeline; later ones share a row. */
-const MAX_ROWS = 4;
+/**
+ * How many rows show before the lane scrolls. More would crowd out the
+ * timeline; sharing a row instead — what this used to do — draws a bar on top
+ * of another one, where it cannot be clicked or edited at all.
+ */
+export const VISIBLE_REDACTION_ROWS = 4;
+/** Room kept to the right of the lane for its scrollbar, so it covers no grip. */
+export const REDACTION_LANE_SCROLLBAR_PX = 8;
+/** Marks the element that scrolls the lane, so a selection can scroll to its row. */
+export const REDACTION_LANE_SCROLL_ATTR = "data-redaction-lane-scroll";
 
 export function redactionLaneHeight(rowCount: number): number {
   return Math.max(1, rowCount) * (ROW_HEIGHT + ROW_GAP) + ROW_GAP;
+}
+
+/** The height the lane takes on screen: all its rows, up to the visible few. */
+export function redactionLaneViewportHeight(rowCount: number): number {
+  return redactionLaneHeight(Math.min(rowCount, VISIBLE_REDACTION_ROWS));
 }
 
 /**
@@ -51,9 +64,7 @@ export function packRedactionRows(redactions: VideoRedaction[]): {
     (a, b) => a.startMs - b.startMs,
   )) {
     let row = ends.findIndex((end) => end <= redaction.startMs);
-    if (row === -1) {
-      row = ends.length < MAX_ROWS ? ends.length : MAX_ROWS - 1;
-    }
+    if (row === -1) row = ends.length;
     ends[row] = Math.max(ends[row] ?? 0, redaction.endMs);
     rowOf.set(redaction.id, row);
   }
@@ -129,6 +140,26 @@ export function RedactionLane({
     [durationMs, redactions],
   );
   const { rows, rowOf } = packRedactionRows(shown);
+
+  /**
+   * Bring the selected bar's row into view. A redaction is often selected from
+   * somewhere else — its chip, or its box on the picture — and past the first
+   * few rows its bar would otherwise be scrolled out of sight.
+   */
+  const selectedRow = selectedId == null ? undefined : rowOf.get(selectedId);
+  useEffect(() => {
+    if (selectedRow === undefined) return;
+    const scroller = rootRef.current?.closest<HTMLElement>(
+      `[${REDACTION_LANE_SCROLL_ATTR}]`,
+    );
+    if (!scroller) return;
+    const top = selectedRow * (ROW_HEIGHT + ROW_GAP);
+    const bottom = top + ROW_HEIGHT + 2 * ROW_GAP;
+    if (top < scroller.scrollTop) scroller.scrollTop = top;
+    else if (bottom > scroller.scrollTop + scroller.clientHeight) {
+      scroller.scrollTop = bottom - scroller.clientHeight;
+    }
+  }, [selectedId, selectedRow]);
 
   const toX = useCallback(
     (ms: number) => (ms / Math.max(durationMs, 1)) * width,

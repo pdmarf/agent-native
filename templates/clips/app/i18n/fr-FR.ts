@@ -27,7 +27,8 @@ const messages = {
     chip: "{{number}}. {{start}}–{{end}}",
     endsAt: "Le masquage se termine à {{at}}",
     goTo: "Aller à ce masquage",
-    helpDraw: "Faites glisser sur l'image.",
+    helpDraw:
+      "Faites glisser sur l'image. Le cadre couvre les 10 secondes suivantes ; maintenez Maj enfoncée en relâchant pour couvrir toute la section sélectionnée à la place.",
     helpDrawTerm: "Couvrir quelque chose",
     helpFollow:
       "Avancez dans la vidéo, puis faites glisser la zone là où l'élément se trouve désormais. La zone se déplace entre les points que vous définissez. Dessinez-la un peu plus grande que ce qu'elle couvre.",

@@ -31,10 +31,16 @@ export interface RedactionOverlayProps {
   redactions: VideoRedaction[];
   /** Original-time playhead: which boxes are showing, and where they sit. */
   playheadMs: number;
+  /** The clip's length, so a box that runs to the end stays on at the end. */
+  durationMs?: number;
   selectedId: string | null;
   onSelect: (id: string | null) => void;
   /** A box was drawn from scratch. */
-  onDraw: (rect: RedactionRect) => void;
+  /**
+   * `wholeSection` is Shift held as the box is let go: cover the selected
+   * section, or the whole clip, rather than the next few seconds.
+   */
+  onDraw: (rect: RedactionRect, options: { wholeSection: boolean }) => void;
   /** A box was moved or resized — becomes a waypoint at the playhead. */
   onReshape: (id: string, rect: RedactionRect) => void;
   /** True while the Redact tool is armed, which is when a drag draws a box. */
@@ -117,6 +123,7 @@ const streakTileUrl = (() => {
 export function RedactionOverlay({
   redactions,
   playheadMs,
+  durationMs,
   selectedId,
   onSelect,
   onDraw,
@@ -203,7 +210,7 @@ export function RedactionOverlay({
    * the gesture away, not a release, so the half-drawn box is thrown away
    * rather than saved as a redaction nobody finished placing.
    */
-  const endGesture = (commit: boolean) => {
+  const endGesture = (commit: boolean, shiftKey = false) => {
     const gesture = gestureRef.current;
     const shape = preview;
     gestureRef.current = null;
@@ -216,7 +223,7 @@ export function RedactionOverlay({
     ) {
       return;
     }
-    if (gesture.kind === "draw") onDraw(shape.rect);
+    if (gesture.kind === "draw") onDraw(shape.rect, { wholeSection: shiftKey });
     else onReshape(gesture.id, shape.rect);
   };
 
@@ -228,7 +235,9 @@ export function RedactionOverlay({
     gestureRef.current = gesture;
   };
 
-  const showing = redactions.filter((r) => isRedactionActiveAt(r, playheadMs));
+  const showing = redactions.filter((r) =>
+    isRedactionActiveAt(r, playheadMs, durationMs),
+  );
   // The burn's block size, scaled from the picture down to the preview, so a
   // block looks here the size it will be in the file.
   // A streak's height on screen: what it will be in the file, scaled down to
@@ -269,7 +278,7 @@ export function RedactionOverlay({
         begin(e, { kind: "draw", fromX: at.x, fromY: at.y });
       }}
       onPointerMove={handleMove}
-      onPointerUp={() => endGesture(true)}
+      onPointerUp={(e) => endGesture(true, e.shiftKey)}
       onPointerCancel={() => endGesture(false)}
     >
       <div

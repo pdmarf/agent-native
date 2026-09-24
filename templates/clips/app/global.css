@@ -240,3 +240,23 @@
 .clips-toolbar-strip:hover::-webkit-scrollbar-thumb {
   background: hsl(var(--muted-foreground) / 0.6);
 }
+
+/* The redaction lane past its first few rows. Always drawn, for the same
+   reason as the toolbar strip: an overlay scrollbar gives no sign there is
+   more below. */
+.clips-lane-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: hsl(var(--muted-foreground) / 0.45) transparent;
+}
+.clips-lane-scroll::-webkit-scrollbar {
+  -webkit-appearance: none;
+  width: 6px;
+}
+.clips-lane-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+.clips-lane-scroll::-webkit-scrollbar-thumb {
+  background: hsl(var(--muted-foreground) / 0.45);
+  border-radius: 9999px;
+}
+

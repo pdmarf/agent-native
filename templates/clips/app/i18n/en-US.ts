@@ -1405,7 +1405,8 @@ const messages = {
     helpLead:
       "Nothing is hidden until you press Burn in. Until then the box is only drawn on top, and the video underneath still shows everything.",
     helpDrawTerm: "Cover something",
-    helpDraw: "Drag across the picture.",
+    helpDraw:
+      "Drag across the picture. The box covers the next 10 seconds; hold Shift as you let go to cover the whole selected section instead.",
     helpMoveTerm: "Move or resize a box",
     helpMove: "Drag the box, or one of its corners.",
     helpFollowTerm: "Follow something that moves",

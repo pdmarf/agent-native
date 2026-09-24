@@ -249,6 +249,21 @@ describe("burning redactions into a recording", () => {
     expect(state.ffmpegRuns).toBe(1);
   });
 
+  it("covers the tail of a file longer than the recording said, for a box run to the end", async () => {
+    // The editor lays boxes out against the row's length. A box dragged to
+    // the end of the timeline ends at 5s; the file runs to 7.5s, and those
+    // last two and a half seconds must not be encoded untouched.
+    recording.durationMs = 5_000;
+    state.probedDurationMs = 7_500;
+    state.burnedDurationMs = 7_500;
+
+    await run();
+
+    const filter = state.ffmpegArgs.join(" ");
+    expect(filter).toMatch(/,7\.5(0*)?\)/);
+    expect(filter).not.toMatch(/,5(\.0*)?\)/);
+  });
+
   it("marks the title as redacted, once however many times it is burned", async () => {
     await run();
     expect(state.updated[0].title).toBe("(Redacted) Test recording");
