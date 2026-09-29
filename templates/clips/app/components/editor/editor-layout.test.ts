@@ -48,7 +48,7 @@ describe("EditorLayout media loading", () => {
     const source = readSource();
 
     expect(source).toContain("<HelpPopover");
-    expect(source).toContain('t("redaction.helpDraw")');
+    expect(source).toContain('t("redaction.helpDraw",');
     expect(source).toContain('t("timelineTrack.helpSplit")');
     expect(source).not.toMatch(
       /<p[^>]*>\s*\{t\("(redaction|timelineTrack)\.hint"\)\}/,

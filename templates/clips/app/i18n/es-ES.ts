@@ -34,7 +34,8 @@ const messages = {
     chip: "{{number}}. {{start}}–{{end}}",
     endsAt: "La difuminación termina en {{at}}",
     goTo: "Ir a esta difuminación",
-    helpDraw: "Arrastra sobre la imagen.",
+    helpDraw:
+      "Arrastra sobre la imagen. El recuadro cubre los {{seconds}} segundos siguientes. Mantén pulsada Mayús al soltar para cubrir la sección seleccionada o, si no hay ninguna, todo el clip.",
     helpDrawTerm: "Cubrir algo",
     helpFollow:
       "Avanza en el vídeo y arrastra el cuadro hasta donde esté ahora el elemento. El cuadro se desplaza entre los puntos que marques. Dibújalo un poco más grande que lo que cubre.",

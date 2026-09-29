@@ -35,7 +35,8 @@ const messages = {
     chip: "{{number}}. {{start}}–{{end}}",
     endsAt: "A tarja termina em {{at}}",
     goTo: "Ir para esta tarja",
-    helpDraw: "Arraste sobre a imagem.",
+    helpDraw:
+      "Arraste sobre a imagem. A caixa cobre os próximos {{seconds}} segundos. Segure Shift ao soltar para cobrir a seção selecionada ou, se nenhuma estiver selecionada, o clipe inteiro.",
     helpDrawTerm: "Cobrir algo",
     helpFollow:
       "Avance no vídeo e arraste a caixa até onde o elemento chegou. A caixa desliza entre os pontos que você definir. Desenhe-a um pouco maior do que aquilo que ela cobre.",

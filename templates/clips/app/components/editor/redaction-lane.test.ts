@@ -41,9 +41,11 @@ describe("laying redactions out in the lane", () => {
     expect(rows).toBe(2);
   });
 
-  it("stops growing rather than swallowing the timeline", () => {
+  it("gives every overlapping redaction its own row, however many there are", () => {
     const many = Array.from({ length: 9 }, (_, i) => at(`r${i}`, 0, 5_000));
-    expect(packRedactionRows(many).rows).toBe(4);
+    const { rows, rowOf } = packRedactionRows(many);
+    expect(rows).toBe(9);
+    expect(new Set(rowOf.values()).size).toBe(9);
   });
 
   it("grows the lane with the rows it needs", () => {

@@ -16,6 +16,7 @@ import {
   redactionSegments,
   removeRedactionKey,
   setRedactionKey,
+  extendRedactionsToEnd,
   setRedactionRange,
   type VideoRedaction,
 } from "./video-redactions";
@@ -180,14 +181,39 @@ describe("placing waypoints", () => {
     expect(removeRedactionKey(still, 1_000).keys).toHaveLength(1);
   });
 
-  it("keeps waypoints when the time range is shortened", () => {
-    const shorter = setRedactionRange(moving, 1_500, 2_500);
-    expect(shorter.keys).toHaveLength(2);
-    expect(redactionRectAt(shorter, 2_000).y).toBeCloseTo(0.4, 6);
+  it("keeps a waypoint the range no longer reaches, so the box does not move", () => {
+    const shorter = setRedactionRange(moving, 1_000, 2_000);
+    expect(shorter.keys).toEqual(moving.keys);
+    for (const at of [1_000, 1_500, 2_000]) {
+      expect(redactionRectAt(shorter, at).y).toBeCloseTo(
+        redactionRectAt(moving, at).y,
+        6,
+      );
+    }
+  });
+
+  it("brings the path back when the range is lengthened again", () => {
+    const again = setRedactionRange(
+      setRedactionRange(moving, 1_000, 2_000),
+      1_000,
+      4_000,
+    );
+    expect(redactionRectAt(again, 3_000).y).toBeCloseTo(0.6, 6);
+  });
+
+  it("leaves the waypoints alone when they are all still inside", () => {
+    expect(setRedactionRange(moving, 500, 3_500).keys).toEqual(moving.keys);
   });
 });
 
 describe("cutting a redaction into stretches", () => {
+  it("follows a waypoint past the end without cutting at it", () => {
+    const shorter = setRedactionRange(moving, 1_000, 2_000);
+    const segs = redactionSegments(shorter);
+    expect(segs.map((s) => [s.fromMs, s.toMs])).toEqual([[1_000, 2_000]]);
+    expect(segs[0].to.y).toBeCloseTo(0.4, 6);
+  });
+
   it("gives a still box one stretch", () => {
     const rect = { x: 0.1, y: 0.2, w: 0.3, h: 0.1 };
     expect(redactionSegments(still)).toEqual([
@@ -458,5 +484,42 @@ describe("the burn's ffmpeg arguments", () => {
     expect(args).toContain("0:a?");
     expect(args).toContain("+faststart");
     expect(args).toContain("libx264");
+  });
+});
+
+describe("a redaction that runs to the end of the clip", () => {
+  const toEnd = { ...still, startMs: 1_000, endMs: 10_000 };
+
+  it("stays on at the very end, where playback stops", () => {
+    expect(isRedactionActiveAt(toEnd, 10_000)).toBe(false);
+    expect(isRedactionActiveAt(toEnd, 10_000, 10_000)).toBe(true);
+    // And past it, when the file runs longer than the recording said.
+    expect(isRedactionActiveAt(toEnd, 10_600, 10_000)).toBe(true);
+  });
+
+  it("still switches off at its end when that is not the end of the clip", () => {
+    expect(isRedactionActiveAt(toEnd, 10_000, 20_000)).toBe(false);
+  });
+
+  it("is stretched to the end of a file longer than the recording said", () => {
+    const [burned] = extendRedactionsToEnd([toEnd], 10_000, 10_750);
+    expect(burned.endMs).toBe(10_750);
+  });
+
+  it("leaves one that ends earlier alone", () => {
+    const early = { ...toEnd, endMs: 6_000 };
+    expect(extendRedactionsToEnd([early], 10_000, 10_750)[0]).toBe(early);
+  });
+});
+
+describe("stretching to the end of the file", () => {
+  it("stretches one set to end past the recorded end, as the editor shows it", () => {
+    const past = { ...still, startMs: 0, endMs: 5_000 };
+    expect(extendRedactionsToEnd([past], 2_000, 10_000)[0].endMs).toBe(10_000);
+  });
+
+  it("leaves one that stops before the recorded end where it is", () => {
+    const early = { ...still, startMs: 0, endMs: 1_500 };
+    expect(extendRedactionsToEnd([early], 2_000, 10_000)[0]).toBe(early);
   });
 });

@@ -179,11 +179,41 @@ function rectOf(key: RedactionKey): RedactionRect {
   return { x: key.x, y: key.y, w: key.w, h: key.h };
 }
 
+export const REDACTION_END_TOLERANCE_MS = 100;
+
+export function redactionReachesEnd(
+  redaction: VideoRedaction,
+  durationMs: number,
+): boolean {
+  return (
+    durationMs > 0 && redaction.endMs >= durationMs - REDACTION_END_TOLERANCE_MS
+  );
+}
+
+// With durationMs, a box that runs to the end stays on for the last frame,
+// which is the one left on screen when playback stops.
 export function isRedactionActiveAt(
   redaction: VideoRedaction,
   atMs: number,
+  durationMs?: number,
 ): boolean {
-  return atMs >= redaction.startMs && atMs < redaction.endMs;
+  if (atMs < redaction.startMs) return false;
+  if (atMs < redaction.endMs) return true;
+  return durationMs !== undefined && redactionReachesEnd(redaction, durationMs);
+}
+
+// recordings.durationMs is client-reported and can be shorter than the file,
+// so a box drawn to the end would leave the tail of the burned video showing.
+export function extendRedactionsToEnd(
+  redactions: VideoRedaction[],
+  recordedDurationMs: number,
+  fileDurationMs: number,
+): VideoRedaction[] {
+  return redactions.map((r) =>
+    redactionReachesEnd(r, recordedDurationMs) && fileDurationMs > r.endMs
+      ? { ...r, endMs: Math.round(fileDurationMs) }
+      : r,
+  );
 }
 
 export function setRedactionKey(
@@ -230,6 +260,8 @@ export function removeRedactionKey(
   return keys.length ? { ...redaction, keys } : redaction;
 }
 
+// Waypoints outside the new range are kept, out of sight: they still steer
+// the box up to the edge, and lengthening it again brings its path back.
 export function setRedactionRange(
   redaction: VideoRedaction,
   startMs: number,

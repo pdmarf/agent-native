@@ -58,6 +58,12 @@ import {
   savePlaybackSpeedPreference,
   SLOW_SPEED_CEILING,
 } from "@/lib/playback-speed";
+import {
+  newQueuedWrites,
+  queueWrite,
+  WriteCancelled,
+  type QueuedWrites,
+} from "@/lib/queued-writes";
 import { canOfferRewindHistory } from "@/lib/rewind-visibility";
 import {
   addCut,
@@ -235,13 +241,17 @@ function clampTimelineZoom(value: number): number {
   return Math.round(clamped * 10) / 10;
 }
 
-function normalizeWheelDeltaY(
-  event: WheelEvent,
+/** How long a newly drawn redaction lasts, unless Shift asks for more. */
+const NEW_REDACTION_MS = 10_000;
+
+function normalizeWheelDelta(
+  delta: number,
+  deltaMode: number,
   viewportWidth: number,
 ): number {
-  if (event.deltaMode === 1) return event.deltaY * 16;
-  if (event.deltaMode === 2) return event.deltaY * viewportWidth;
-  return event.deltaY;
+  if (deltaMode === 1) return delta * 16;
+  if (deltaMode === 2) return delta * viewportWidth;
+  return delta;
 }
 
 function shouldProxyWaveformUrl(videoUrl: string): boolean {
@@ -329,6 +339,10 @@ export function EditorLayout({ recordingId, className }: EditorLayoutProps) {
   const [pendingOverlays, setPendingOverlays] = useState<unknown[] | null>(
     null,
   );
+  // One save per list at a time: two in flight could land out of order and
+  // lose the first edit.
+  const trimWritesRef = useRef<QueuedWrites>(newQueuedWrites());
+  const overlayWritesRef = useRef<QueuedWrites>(newQueuedWrites());
   const [previewRedactions, setPreviewRedactions] = useState<
     VideoRedaction[] | null
   >(null);
@@ -345,6 +359,7 @@ export function EditorLayout({ recordingId, className }: EditorLayoutProps) {
   const burnToastRef = useRef<string | number | null>(null);
   const undoStackRef = useRef<EditSnapshot[]>([]);
   const redoStackRef = useRef<EditSnapshot[]>([]);
+  const historyStepInFlightRef = useRef(false);
   const [history, setHistory] = useState({ undo: 0, redo: 0 });
 
   const edits: EditsJson = useMemo(
@@ -473,15 +488,12 @@ export function EditorLayout({ recordingId, className }: EditorLayoutProps) {
   );
 
   const handleTimelineWheel = useCallback(
-    (e: React.WheelEvent<HTMLDivElement>) => {
+    (e: WheelEvent) => {
       const maxScroll = Math.max(0, totalWidth - viewportWidth);
       if (maxScroll <= 0) return;
-      const delta =
-        Math.abs(e.deltaX) > Math.abs(e.deltaY)
-          ? e.deltaX
-          : e.shiftKey
-            ? e.deltaY
-            : 0;
+      const dx = normalizeWheelDelta(e.deltaX, e.deltaMode, viewportWidth);
+      const dy = normalizeWheelDelta(e.deltaY, e.deltaMode, viewportWidth);
+      const delta = Math.abs(dx) > Math.abs(dy) ? dx : e.shiftKey ? dy : 0;
       if (delta === 0) return;
       e.preventDefault();
       setScrollLeft((current) =>
@@ -568,9 +580,18 @@ export function EditorLayout({ recordingId, className }: EditorLayoutProps) {
     };
 
     const handleWheel = (event: WheelEvent) => {
-      if (!event.ctrlKey) return;
+      // React's onWheel is passive, so the pan could not stop the page
+      // scrolling (or a back-swipe) along with it.
+      if (!event.ctrlKey) {
+        handleTimelineWheel(event);
+        return;
+      }
       event.preventDefault();
-      const deltaY = normalizeWheelDeltaY(event, viewportWidth);
+      const deltaY = normalizeWheelDelta(
+        event.deltaY,
+        event.deltaMode,
+        viewportWidth,
+      );
       if (Math.abs(deltaY) < 0.01) return;
       const viewportX = getViewportX(event.clientX);
       const anchorRatio = getAnchorRatio(zoom, scrollLeft, viewportX);
@@ -626,7 +647,7 @@ export function EditorLayout({ recordingId, className }: EditorLayoutProps) {
       el.removeEventListener("gesturechange", handleGestureChange);
       el.removeEventListener("gestureend", handleGestureEnd);
     };
-  }, [scrollLeft, setAnchoredZoom, viewportWidth, zoom]);
+  }, [handleTimelineWheel, scrollLeft, setAnchoredZoom, viewportWidth, zoom]);
 
   useEffect(() => {
     const v = videoRef.current;
@@ -824,16 +845,22 @@ export function EditorLayout({ recordingId, className }: EditorLayoutProps) {
       const record = options?.record ?? true;
       if (record) pushHistory(snapshotOf(savedEdits));
       setPendingTrims(next.trims);
-      try {
+      const write = trimWritesRef.current;
+      const { seq, done } = queueWrite(write, async () => {
         await setTrims.mutateAsync({ recordingId, trims: next.trims });
         await playerDataQuery.refetch();
+      });
+      try {
+        await done;
         return true;
       } catch (err: any) {
         if (record) dropNewestHistory();
-        toast.error(err?.message ?? t("editorLayout.editFailed"));
+        if (!(err instanceof WriteCancelled)) {
+          toast.error(err?.message ?? t("editorLayout.editFailed"));
+        }
         return false;
       } finally {
-        setPendingTrims(null);
+        if (seq === write.seq) setPendingTrims(null);
       }
     },
     [
@@ -960,19 +987,25 @@ export function EditorLayout({ recordingId, className }: EditorLayoutProps) {
     async (overlays: unknown[], record: boolean) => {
       if (record) pushHistory(snapshotOf(savedEdits));
       setPendingOverlays(overlays);
-      try {
+      const write = overlayWritesRef.current;
+      const { seq, done } = queueWrite(write, async () => {
         await setOverlays.mutateAsync({
           recordingId,
           overlays: overlays as Record<string, unknown>[],
         });
         await playerDataQuery.refetch();
+      });
+      try {
+        await done;
         return true;
       } catch (err: any) {
         if (record) dropNewestHistory();
-        toast.error(err?.message ?? t("editorLayout.editFailed"));
+        if (!(err instanceof WriteCancelled)) {
+          toast.error(err?.message ?? t("editorLayout.editFailed"));
+        }
         return false;
       } finally {
-        setPendingOverlays(null);
+        if (seq === write.seq) setPendingOverlays(null);
       }
     },
     [
@@ -1000,9 +1033,13 @@ export function EditorLayout({ recordingId, className }: EditorLayoutProps) {
   );
 
   const addRedaction = useCallback(
-    (rect: RedactionRect) => {
+    (rect: RedactionRect, { wholeSection }: { wholeSection: boolean }) => {
       const at = Math.round(playheadMs);
-      const range = selectedClip ?? { startMs: at, endMs: at + 5_000 };
+      // Not the selected section by default: an unsplit clip is one section
+      // the length of the video, so every box would run the whole clip.
+      const range = wholeSection
+        ? (selectedClip ?? { startMs: 0, endMs: durationMs })
+        : { startMs: at, endMs: at + NEW_REDACTION_MS };
       const startMs = Math.round(range.startMs);
       const redaction: VideoRedaction = clampRedactionToDuration(
         {
@@ -1077,40 +1114,51 @@ export function EditorLayout({ recordingId, className }: EditorLayoutProps) {
   const burnIn = useCallback(async () => {
     if (burning || burnStorageCheckInFlightRef.current) return;
     burnStorageCheckInFlightRef.current = true;
+    const toastId = toast.loading(t("editorLayout.burningRedactions"));
+    // The burn reads the saved edits, so it waits for any still queued. If
+    // one of them fails, what is saved is not what the user last saw.
+    const writes = [trimWritesRef.current, overlayWritesRef.current];
+    const failedBefore = writes.map((w) => w.failures);
     try {
       const storageCheck = await videoStorageStatus.refetch();
       if (
         storageCheck.isError ||
         typeof storageCheck.data?.configured !== "boolean"
       ) {
-        toast.error(t("recordingPage.tryAgainMoment"));
+        toast.error(t("recordingPage.tryAgainMoment"), { id: toastId });
         return;
       }
       if (!storageCheck.data.configured) {
+        toast.dismiss(toastId);
         setStorageSetupOpen(true);
         return;
       }
+      await Promise.all(writes.map((w) => w.tail));
+      if (writes.some((w, i) => w.failures !== failedBefore[i])) {
+        toast.error(t("editorLayout.burnFailed"), { id: toastId });
+        return;
+      }
     } catch {
-      toast.error(t("recordingPage.tryAgainMoment"));
+      toast.error(t("recordingPage.tryAgainMoment"), { id: toastId });
       return;
     } finally {
       burnStorageCheckInFlightRef.current = false;
     }
     setBurning(true);
-    burnToastRef.current = toast.loading(t("editorLayout.burningRedactions"));
+    burnToastRef.current = toastId;
     try {
       const result: any = await burnRedactions.mutateAsync({ recordingId });
       if (result && result.started === false) {
         setBurning(false);
         toast.error(result.reason ?? t("editorLayout.burnFailed"), {
-          id: burnToastRef.current ?? undefined,
+          id: toastId,
         });
         burnToastRef.current = null;
       }
     } catch (err: any) {
       setBurning(false);
       toast.error(err?.message ?? t("editorLayout.burnFailed"), {
-        id: burnToastRef.current ?? undefined,
+        id: toastId,
       });
       burnToastRef.current = null;
     }
@@ -1126,7 +1174,7 @@ export function EditorLayout({ recordingId, className }: EditorLayoutProps) {
     );
   }, [burnPercent, burning, t]);
 
-  const stepHistory = useCallback(
+  const stepHistoryNow = useCallback(
     async (direction: "undo" | "redo") => {
       const from =
         direction === "undo" ? undoStackRef.current : redoStackRef.current;
@@ -1167,6 +1215,21 @@ export function EditorLayout({ recordingId, className }: EditorLayoutProps) {
       });
     },
     [commitEdits, savedEdits, t, writeOverlays],
+  );
+
+  const stepHistory = useCallback(
+    async (direction: "undo" | "redo") => {
+      // Saves wait their turn, so a second press before the first lands would
+      // read the same history entry and undo it twice.
+      if (historyStepInFlightRef.current) return;
+      historyStepInFlightRef.current = true;
+      try {
+        await stepHistoryNow(direction);
+      } finally {
+        historyStepInFlightRef.current = false;
+      }
+    },
+    [stepHistoryNow],
   );
 
   const callTrim = useCallback(
@@ -1332,6 +1395,7 @@ export function EditorLayout({ recordingId, className }: EditorLayoutProps) {
                 <RedactionOverlay
                   redactions={redactions}
                   playheadMs={playheadMs}
+                  durationMs={durationMs}
                   selectedId={selectedRedactionId}
                   onSelect={setSelectedRedactionId}
                   onDraw={addRedaction}
@@ -1415,7 +1479,9 @@ export function EditorLayout({ recordingId, className }: EditorLayoutProps) {
                     rows={[
                       {
                         term: t("redaction.helpDrawTerm"),
-                        text: t("redaction.helpDraw"),
+                        text: t("redaction.helpDraw", {
+                          seconds: NEW_REDACTION_MS / 1000,
+                        }),
                       },
                       {
                         term: t("redaction.helpMoveTerm"),
@@ -1520,12 +1586,11 @@ export function EditorLayout({ recordingId, className }: EditorLayoutProps) {
             ) : (
               <div
                 ref={containerRef}
-                className="min-w-0 space-y-1 overflow-hidden border-t border-border p-2"
+                // The wider right padding holds the redaction rows' scrollbar,
+                // which sits just past the track.
+                className="min-w-0 space-y-1 overflow-hidden border-t border-border py-2 pl-2 pr-3"
               >
-                <div
-                  className="relative min-w-0 overflow-hidden"
-                  onWheel={handleTimelineWheel}
-                >
+                <div className="relative min-w-0 overflow-hidden">
                   <Waveform
                     peaks={peaks}
                     sprite={filmstripSprite}
@@ -1570,28 +1635,18 @@ export function EditorLayout({ recordingId, className }: EditorLayoutProps) {
                 </div>
 
                 {redactions.length > 0 ? (
-                  <div
-                    className="min-w-0 overflow-hidden"
-                    style={{ width: viewportWidth }}
-                  >
-                    <div
-                      style={{
-                        transform: `translateX(${-clampedScrollLeft}px)`,
-                        width: totalWidth,
-                      }}
-                    >
-                      <RedactionLane
-                        width={totalWidth}
-                        durationMs={durationMs}
-                        redactions={redactions}
-                        selectedId={selectedRedactionId}
-                        onSelect={setSelectedRedactionId}
-                        onPreview={setPreviewRedactions}
-                        onCommit={(next) => void commitRedactions(next)}
-                        onSeek={seek}
-                      />
-                    </div>
-                  </div>
+                  <RedactionLane
+                    width={totalWidth}
+                    viewportWidth={viewportWidth}
+                    scrollLeft={clampedScrollLeft}
+                    durationMs={durationMs}
+                    redactions={redactions}
+                    selectedId={selectedRedactionId}
+                    onSelect={setSelectedRedactionId}
+                    onPreview={setPreviewRedactions}
+                    onCommit={(next) => void commitRedactions(next)}
+                    onSeek={seek}
+                  />
                 ) : null}
 
                 <div

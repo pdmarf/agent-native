@@ -17,9 +17,11 @@ import {
 export interface RedactionOverlayProps {
   redactions: VideoRedaction[];
   playheadMs: number;
+  durationMs?: number;
   selectedId: string | null;
   onSelect: (id: string | null) => void;
-  onDraw: (rect: RedactionRect) => void;
+  /** `wholeSection`: Shift was held on release. */
+  onDraw: (rect: RedactionRect, options: { wholeSection: boolean }) => void;
   onReshape: (id: string, rect: RedactionRect) => void;
   drawing: boolean;
   newStyle: RedactionStyle;
@@ -82,6 +84,7 @@ const streakTileUrl = (() => {
 export function RedactionOverlay({
   redactions,
   playheadMs,
+  durationMs,
   selectedId,
   onSelect,
   onDraw,
@@ -160,7 +163,7 @@ export function RedactionOverlay({
     });
   };
 
-  const endGesture = (commit: boolean) => {
+  const endGesture = (commit: boolean, shiftKey = false) => {
     const gesture = gestureRef.current;
     const shape = preview;
     gestureRef.current = null;
@@ -173,7 +176,7 @@ export function RedactionOverlay({
     ) {
       return;
     }
-    if (gesture.kind === "draw") onDraw(shape.rect);
+    if (gesture.kind === "draw") onDraw(shape.rect, { wholeSection: shiftKey });
     else onReshape(gesture.id, shape.rect);
   };
 
@@ -185,7 +188,9 @@ export function RedactionOverlay({
     gestureRef.current = gesture;
   };
 
-  const showing = redactions.filter((r) => isRedactionActiveAt(r, playheadMs));
+  const showing = redactions.filter((r) =>
+    isRedactionActiveAt(r, playheadMs, durationMs),
+  );
   const previewBlockPx = Math.max(
     3,
     Math.round(
@@ -220,7 +225,7 @@ export function RedactionOverlay({
         begin(e, { kind: "draw", fromX: at.x, fromY: at.y });
       }}
       onPointerMove={handleMove}
-      onPointerUp={() => endGesture(true)}
+      onPointerUp={(e) => endGesture(true, e.shiftKey)}
       onPointerCancel={() => endGesture(false)}
     >
       <div
